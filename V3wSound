@@ -1,0 +1,339 @@
+import pygame
+import random
+import math
+import os
+
+# Initialize Pygame and Mixer
+pygame.init()
+pygame.mixer.init()  # Initialize the mixer for sound
+
+# Set up display (force fullscreen with fix for Pydroid3)
+try:
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    WIDTH, HEIGHT = screen.get_size()
+except AttributeError:
+    pygame.display.init()
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    WIDTH, HEIGHT = screen.get_size()
+pygame.display.set_caption("Starry Night")
+
+# Colors
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+YELLOW = (255, 255, 200)
+BLUE = (0, 100, 255)  # Blue for inactive button
+GREEN = (0, 255, 0)    # Green for active button
+PORTAL_COLOR = (10, 10, 20)  # Base portal color
+LIGHT_GRAY = (180, 180, 180)  # Light gray for star outline
+
+# Load sound files with diagnostics
+LOOP_PATH = "/storage/emulated/0/Internal storage/sequence_looped.wav"  # Primary path for loop
+SHUTDOWN_PATH = "/storage/emulated/0/Internal storage/shutdown.wav"    # Path for shutdown sound
+FALLBACK_LOOP_PATH = "/storage/emulated/0/sequence_looped.wav"        # Fallback for loop
+portal_sound = None
+shutdown_sound = None
+
+# Load looping sound
+if os.path.exists(LOOP_PATH):
+    try:
+        portal_sound = pygame.mixer.Sound(LOOP_PATH)
+        portal_sound.set_volume(1.0)  # Max volume
+        print(f"Loaded loop sound from {LOOP_PATH}, duration: {portal_sound.get_length()} seconds")
+    except Exception as e:
+        print(f"Failed to load {LOOP_PATH}: {e}")
+elif os.path.exists(FALLBACK_LOOP_PATH):
+    try:
+        portal_sound = pygame.mixer.Sound(FALLBACK_LOOP_PATH)
+        portal_sound.set_volume(1.0)  # Max volume
+        print(f"Loaded loop sound from {FALLBACK_LOOP_PATH}, duration: {portal_sound.get_length()} seconds")
+    except Exception as e:
+        print(f"Failed to load {FALLBACK_LOOP_PATH}: {e}")
+else:
+    print(f"Loop sound file not found at {LOOP_PATH} or {FALLBACK_LOOP_PATH}")
+
+# Load shutdown sound
+if os.path.exists(SHUTDOWN_PATH):
+    try:
+        shutdown_sound = pygame.mixer.Sound(SHUTDOWN_PATH)
+        shutdown_sound.set_volume(1.0)  # Max volume
+        print(f"Loaded shutdown sound from {SHUTDOWN_PATH}, duration: {shutdown_sound.get_length()} seconds")
+    except Exception as e:
+        print(f"Failed to load {SHUTDOWN_PATH}: {e}")
+else:
+    print(f"Shutdown sound file not found at {SHUTDOWN_PATH}")
+
+# Star class for regular stars
+class Star:
+    def __init__(self):
+        self.reset_position()
+        self.base_size = random.uniform(1, 4)
+        self.size = self.base_size
+        self.brightness = random.randint(100, 255)
+        self.twinkle_speed = random.uniform(0.5, 2)
+        self.angle = 0
+        self.radius = 0
+        self.target_x = self.x
+        self.target_y = self.y
+        self.is_rim_star = False
+        self.forming_outline = False
+        self.initial_x = self.x
+        self.initial_y = self.y
+        self.is_background_star = random.random() < 0.25
+        self.target_radius = 0
+
+    def reset_position(self):
+        self.x = random.randint(0, WIDTH)
+        self.y = random.randint(0, HEIGHT)
+        self.initial_x = self.x
+        self.initial_y = self.y
+
+    def twinkle(self):
+        if self.forming_outline:
+            return
+        self.brightness += random.randint(-20, 20) * self.twinkle_speed
+        self.brightness = max(150 if vortex_active and not self.forming_outline and not self.is_background_star else 100, 
+                            min(255, self.brightness))
+
+    def update_vortex(self, vortex_active, center_x, center_y, forming_phase):
+        if vortex_active and not self.is_background_star:
+            if self.radius == 0:  # Initialize vortex properties
+                dx = self.initial_x - center_x
+                dy = self.initial_y - center_y
+                self.radius = math.sqrt(dx*dx + dy*dy)
+                self.angle = math.atan2(dy, dx)
+                self.is_rim_star = random.random() < 0.7
+                min_radius = (min(WIDTH, HEIGHT) * 0.75) / 2
+                rim_thickness = min_radius * 0.35
+                rim_outer_edge = min_radius + rim_thickness
+                self.target_radius = rim_outer_edge - random.uniform(0, rim_thickness)
+                
+            min_radius = (min(WIDTH, HEIGHT) * 0.75) / 2
+            rim_thickness = min_radius * 0.35
+            rim_outer_edge = min_radius + rim_thickness
+            
+            if forming_phase:
+                self.radius += (self.target_radius - self.radius) * 0.1
+                self.angle += 0.3 * (self.radius / self.target_radius)
+                self.x = center_x + math.cos(self.angle) * self.radius
+                self.y = center_y + math.sin(self.angle) * self.radius
+                self.forming_outline = abs(self.radius - self.target_radius) > 1
+            else:
+                self.radius = rim_outer_edge - random.uniform(0, rim_thickness)
+                self.angle += 0.25
+                self.x = center_x + math.cos(self.angle) * self.radius
+                self.y = center_y + math.sin(self.angle) * self.radius
+                self.forming_outline = False
+            
+            self.size = self.base_size * 1.5 if not self.forming_outline else self.base_size
+        else:
+            self.x += (self.target_x - self.x) * 0.1
+            self.y += (self.target_y - self.y) * 0.1
+            self.radius = 0
+            self.is_rim_star = False
+            self.forming_outline = False
+            self.size = self.base_size
+
+    def draw(self, surface, vortex_active, forming_phase):
+        if vortex_active and forming_phase and not self.is_background_star:
+            color = LIGHT_GRAY
+        else:
+            color = (self.brightness, self.brightness, self.brightness)
+        pygame.draw.circle(surface, color, (int(self.x), int(self.y)), int(self.size))
+
+# Particle class for inner portal effects
+class PortalParticle:
+    def __init__(self, center_x, center_y, max_radius):
+        self.angle = random.uniform(0, 2 * math.pi)
+        self.radius = random.uniform(0, max_radius)
+        self.speed = random.uniform(0.05, 0.15)
+        self.life = random.randint(30, 60)
+        self.x = center_x + math.cos(self.angle) * self.radius
+        self.y = center_y + math.sin(self.angle) * self.radius
+        self.distort_factor = random.uniform(0.5, 1.5)
+
+    def update(self, center_x, center_y):
+        self.angle += self.speed
+        self.radius *= 0.98
+        self.x = center_x + math.cos(self.angle) * self.radius * self.distort_factor
+        self.y = center_y + math.sin(self.angle) * self.radius / self.distort_factor
+        self.life -= 1
+
+    def draw(self, surface):
+        if self.life > 0:
+            alpha = int(255 * (self.life / 60))
+            color = (50, 50, 100 + alpha // 2)
+            pygame.draw.circle(surface, color, (int(self.x), int(self.y)), 2)
+
+# Shooting star class
+class ShootingStar:
+    def __init__(self):
+        if random.random() < 0.5:
+            self.x = 0
+            self.angle = random.uniform(0, 0.5)
+        else:
+            self.x = WIDTH
+            self.angle = random.uniform(math.pi - 0.5, math.pi)
+        self.y = random.randint(0, HEIGHT // 2)
+        self.speed = random.uniform(10, 20)
+        self.life = int(math.sqrt(WIDTH**2 + HEIGHT**2) / self.speed) + 10
+
+    def move(self):
+        self.x += math.cos(self.angle) * self.speed
+        self.y += math.sin(self.angle) * self.speed
+        self.life -= 1
+
+    def draw(self, surface, vortex_active, center_x, center_y, portal_radius):
+        if self.life > 0:
+            end_x = self.x - math.cos(self.angle) * self.speed * 5
+            end_y = self.y - math.sin(self.angle) * self.speed * 5
+            if vortex_active:
+                dist_start = math.sqrt((self.x - center_x)**2 + (self.y - center_y)**2)
+                dist_end = math.sqrt((end_x - center_x)**2 + (end_y - center_y)**2)
+                if dist_start > portal_radius and dist_end > portal_radius:
+                    pygame.draw.line(surface, YELLOW, 
+                                   (self.x, self.y), 
+                                   (end_x, end_y), 
+                                   2)
+            else:
+                pygame.draw.line(surface, YELLOW, 
+                               (self.x, self.y), 
+                               (end_x, end_y), 
+                               2)
+
+# Button class
+class Button:
+    def __init__(self, text, x, y, radius):
+        self.center = (x, y)
+        self.radius = radius
+        self.text = text
+        self.font = pygame.font.SysFont(None, int(HEIGHT / 20))
+        self.active = False
+
+    def draw(self, surface):
+        color = BLUE if not self.active else GREEN
+        pygame.draw.circle(surface, color, self.center, self.radius)
+        text_surf = self.font.render(self.text, True, WHITE)
+        text_rect = text_surf.get_rect(center=self.center)
+        surface.blit(text_surf, text_rect)
+
+    def check_click(self, pos):
+        distance = math.sqrt((pos[0] - self.center[0])**2 + (pos[1] - self.center[1])**2)
+        if distance <= self.radius:
+            self.active = not self.active
+            # Sound control
+            if portal_sound and shutdown_sound:
+                if self.active:
+                    portal_sound.play(loops=-1)  # Loop portal sound
+                    print("Playing portal loop...")
+                else:
+                    portal_sound.stop()  # Stop loop
+                    shutdown_sound.play()  # Play shutdown sound once
+                    print("Playing shutdown sound...")
+            elif portal_sound:
+                if self.active:
+                    portal_sound.play(loops=-1)  # Loop portal sound
+                    print("Playing portal loop (no shutdown sound loaded)...")
+                else:
+                    portal_sound.fadeout(1000)  # Fade out if no shutdown sound
+                    print("Stopping portal sound with fadeout (no shutdown sound loaded)...")
+            else:
+                print("No sound available to play")
+            return True
+        return False
+
+# Create objects
+stars = [Star() for _ in range(500)]
+shooting_stars = []
+portal_particles = []
+button = Button("Portal Time", WIDTH // 2, HEIGHT - int(HEIGHT / 10), int(HEIGHT / 15))
+vortex_active = False
+forming_phase = False
+forming_timer = 0
+forming_duration = 60
+pulse_timer = 0
+
+# Main game loop
+clock = pygame.time.Clock()
+running = True
+
+while running:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                running = False
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if button.check_click(event.pos):
+                vortex_active = button.active
+                if vortex_active:
+                    forming_phase = True
+                    forming_timer = forming_duration
+                    for star in stars:
+                        star.initial_x = star.x
+                        star.initial_y = star.y
+
+    screen.fill(BLACK)
+
+    # Vortex center and radius
+    center_x, center_y = WIDTH // 2, HEIGHT // 2
+    portal_radius = (min(WIDTH, HEIGHT) * 0.75) / 2 + (min(WIDTH, HEIGHT) * 0.75) / 4
+    inner_radius = (min(WIDTH, HEIGHT) * 0.75) / 2
+
+    # Draw portal with effects when active
+    if vortex_active:
+        for r in range(int(inner_radius), 0, -1):
+            t = pulse_timer * 0.01 + r / inner_radius
+            red = int(10 + 20 * math.sin(t))
+            green = int(10 + 20 * math.cos(t + 2))
+            blue = int(20 + 30 * math.sin(t + 4))
+            red = max(0, min(255, red))
+            green = max(0, min(255, green))
+            blue = max(0, min(255, blue))
+            pygame.draw.circle(screen, (red, green, blue), (center_x, center_y), r)
+
+        pulse = 0.5 + 0.5 * math.sin(pulse_timer * 0.1)
+        glow_radius = int(inner_radius * 0.9 * pulse)
+        pygame.draw.circle(screen, (50, 50, 100), (center_x, center_y), glow_radius, 3)
+
+        if random.random() < 0.2:
+            portal_particles.append(PortalParticle(center_x, center_y, inner_radius))
+        for particle in portal_particles[:]:
+            particle.update(center_x, center_y)
+            particle.draw(screen)
+            if particle.life <= 0:
+                portal_particles.remove(particle)
+
+    if forming_phase and forming_timer > 0:
+        forming_timer -= 1
+        if forming_timer <= 0:
+            forming_phase = False
+
+    for star in stars:
+        star.twinkle()
+        star.update_vortex(vortex_active, center_x, center_y, forming_phase)
+        star.draw(screen, vortex_active, forming_phase)
+
+    if random.random() < 0.02:
+        shooting_stars.append(ShootingStar())
+
+    for s_star in shooting_stars[:]:
+        s_star.move()
+        s_star.draw(screen, vortex_active, center_x, center_y, portal_radius)
+        if s_star.life <= 0 or s_star.x < -50 or s_star.x > WIDTH + 50 or s_star.y > HEIGHT + 50:
+            shooting_stars.remove(s_star)
+
+    button.draw(screen)
+
+    pulse_timer += 1
+
+    pygame.display.flip()
+    clock.tick(60)
+
+# Cleanup
+if portal_sound:
+    portal_sound.stop()
+if shutdown_sound:
+    shutdown_sound.stop()
+pygame.mixer.quit()
+pygame.quit()

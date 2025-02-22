@@ -1,2 +1,2 @@
-python code for s portal visual
+python code for a portal visual
 # Portal-Time
